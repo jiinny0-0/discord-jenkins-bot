@@ -1,0 +1,17 @@
+# 비밀값 (원본은 C:\test-automation\bot-data\.env)
+.env
+.env.*
+
+# 상태 파일 (C:\test-automation\bot-data\ 에 있음. 예전 위치에 남은 것도 올리지 않음)
+*-state.json
+bat-schedule.json
+my-plans.json
+connector-chrome-profile/
+connector-stage-profiles/
+*.log
+*.tmp
+
+__pycache__/
+*.py[cod]
+.venv/
+*.bak*
