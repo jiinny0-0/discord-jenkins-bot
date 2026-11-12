@@ -108,7 +108,7 @@ def _is_no_desktop(exc: Exception) -> bool:
     return "no active desktop" in text.lower() or "SetCursorPos" in text
 
 
-VERSION = "2026-11-03a"
+VERSION = "2026-11-12a"
 STEP_WAIT = 3  # 단계 사이 대기(초). 앱이 이전 동작을 끝낼 시간을 준다.
 RUN_LOG = DATA_DIR / "connector-last.log"  # 마지막 실행의 진행 기록 (토큰·비밀번호 없음, 주소 쿼리는 가림)
 # 재시도 경로 시험용. 첫 시도에서 한 번만 실패를 일으킨다: double(딥링크 두 번 → 터널 충돌) / logout(로그인 직후 로그아웃)
@@ -1469,8 +1469,11 @@ def save_state(data: dict) -> None:
     STATE_FILE.write_text(json.dumps(data), encoding="utf-8")
 
 
-# 일반 브라우저(Chrome/Edge)에 남는 콘솔 로그인 탭: 이 경로들만 닫는다
-BROWSER_LOGIN_PATH_RE = re.compile(r"/(auth/login|workspace|login/success|login)\b", re.IGNORECASE)
+# 일반 브라우저(Chrome/Edge)에 남는 커넥터 로그인 탭. 커넥터 앱이 로그인 화면이 될 때 기본 브라우저로 연다.
+# 주소에 connector_url= 이 붙은 콘솔 로그인 탭만 닫는다 (사람이 직접 연 콘솔 탭은 건드리지 않음).
+# 예: https://sse-qastage.aioncloud.com:50443/auth/login?connector_url=aiconnector%3Aopen%2F
+BROWSER_IMAGES = ("chrome.exe", "msedge.exe")
+LOGIN_TAB_MARK = "connector_url="
 
 
 def _browser_address(window) -> str:
@@ -1504,28 +1507,101 @@ def _close_current_tab(window) -> bool:
     return False
 
 
+def _is_browser_window(window) -> bool:
+    """Chrome/Edge 창인지. VS Code·Discord 같은 Electron 앱도 창 클래스가 같아서 프로세스 이름으로 거른다."""
+    try:
+        return Path(_process_path(window.process_id())).name.lower() in BROWSER_IMAGES
+    except Exception:
+        return False
+
+
+def _tab_selected(tab) -> bool:
+    try:
+        return bool(tab.iface_selection_item.CurrentIsSelected)
+    except Exception:
+        return False
+
+
+def _is_login_tab_url(url: str, host: str) -> bool:
+    url = url.lower()
+    return bool(host) and host in url and LOGIN_TAB_MARK in url
+
+
+def _close_login_tabs_in(window, host: str, label: str) -> int:
+    """창 하나의 모든 탭을 훑어 커넥터 로그인 탭을 닫는다.
+
+    탭 주소는 그 탭을 선택해야 주소창에서 읽을 수 있어서 하나씩 선택한다. 끝나면 원래 보던 탭으로 돌아간다.
+    """
+    tabs = window.descendants(control_type="TabItem")
+    original = next((t.window_text() for t in tabs if _tab_selected(t)), None)
+    closed = 0
+    unreadable = 0
+    for _ in range(30):  # 닫을 때마다 탭 목록이 바뀌므로 처음부터 다시 훑는다 (무한 반복 방지)
+        tabs = window.descendants(control_type="TabItem")
+        found = False
+        unreadable = 0
+        for tab in tabs or [None]:  # 탭 목록이 안 보이면 현재 탭만 확인
+            if tab is not None and not _tab_selected(tab):
+                tab.iface_selection_item.Select()
+                time.sleep(0.3)
+            url = _browser_address(window)
+            if not url:
+                unreadable += 1
+            elif _is_login_tab_url(url, host):
+                found = True  # 이 탭이 지금 선택돼 있음
+                break
+        if not found:
+            break
+        last_tab = len(tabs) <= 1
+        if not _close_current_tab(window):
+            say(f"  로그인 탭 정리: {label} 탭 닫기 버튼을 찾지 못함")
+            break
+        closed += 1
+        time.sleep(0.7)
+        if last_tab:
+            return closed  # 탭이 하나뿐이라 창을 닫음
+    if unreadable:
+        say(f"  로그인 탭 정리: {label} 주소를 읽지 못한 탭 {unreadable}개 (화면 잠김·최소화 가능성)")
+    if original:
+        for tab in window.descendants(control_type="TabItem"):
+            if tab.window_text() == original and not _tab_selected(tab):
+                tab.iface_selection_item.Select()
+                break
+    return closed
+
+
 def close_browser_login_tabs(host: str) -> int:
-    """일반 Chrome/Edge에서 콘솔 로그인 페이지가 떠 있는 탭을 닫는다 (현재 탭 기준, 창마다 최대 10개)."""
+    """일반 Chrome/Edge 창의 모든 탭에서 커넥터 로그인 탭(connector_url=)을 닫는다. 닫은 개수를 돌려준다.
+
+    결과와 못 닫은 이유는 진행 기록(connector-last.log)에 남긴다. 주소 자체는 남기지 않는다.
+    """
     from pywinauto import Desktop
 
-    closed = 0
+    host = (host or "").lower()
     try:
-        windows = Desktop(backend="uia").windows(class_name="Chrome_WidgetWin_1")
-    except Exception:
+        windows = [w for w in Desktop(backend="uia").windows(class_name="Chrome_WidgetWin_1") if _is_browser_window(w)]
+    except Exception as e:
+        say(f"  로그인 탭 정리: 브라우저 창 목록을 못 읽음 ({type(e).__name__})")
         return 0
-    for window in windows:
-        for _ in range(10):
-            try:
-                url = _browser_address(window).lower()
-                if host not in url or not BROWSER_LOGIN_PATH_RE.search(url):
-                    break
-                if not _close_current_tab(window):
-                    break
-                closed += 1
-                time.sleep(0.7)
-            except Exception:
-                break  # 창이 닫혔거나 접근 불가
+    closed = 0
+    for index, window in enumerate(windows, 1):
+        label = f"창 {index}"
+        try:
+            closed += _close_login_tabs_in(window, host, label)
+        except Exception as e:
+            say(f"  로그인 탭 정리: {label} 처리 중 중단 ({type(e).__name__})")
+    say(f"  로그인 탭 정리: 브라우저 창 {len(windows)}개, 닫은 탭 {closed}개")
     return closed
+
+
+def _close_login_tabs_after(stage: str) -> int:
+    """connector on이 끝난 뒤(성공·이미 ON·실패 모두) 남은 로그인 탭을 닫는다. 여기서 난 오류로 결과를 바꾸지 않는다."""
+    try:
+        time.sleep(2)  # 앱이 브라우저를 조금 늦게 여는 경우
+        return close_browser_login_tabs(host_of(get_console_url(stage)))
+    except Exception as e:
+        say(f"  로그인 탭 정리 실패 ({type(e).__name__})")
+        return 0
 
 
 def _today_log(app: str) -> Path | None:
@@ -1653,7 +1729,22 @@ class NotConfigured(ConnectorError):
     """이 스테이지는 커넥터 로그인 설정이 없다 (console_url 미설정 등)."""
 
 
-def connector_on(stage: str, override: dict | None = None) -> str:
+def connector_on(stage: str, override: dict | None = None) -> tuple[str, str]:
+    """앱 전환 + 스테이지 + 로그인 + ON. 끝나면 성공·이미 ON·실패와 상관없이 브라우저에 남은 로그인 탭을 닫는다."""
+    try:
+        workspace, detail = _connector_on(stage, override)
+    except NotConfigured:
+        raise  # 콘솔 주소가 없는 스테이지: 열린 탭도 없다
+    except Exception:
+        _close_login_tabs_after(stage)
+        raise
+    closed = _close_login_tabs_after(stage)
+    if closed:
+        detail += f" → 로그인 탭 {closed}개 닫음"
+    return workspace, detail
+
+
+def _connector_on(stage: str, override: dict | None = None) -> tuple[str, str]:
     override = override or {}
     try:
         console_url = get_console_url(stage)
@@ -1778,11 +1869,6 @@ def connector_on(stage: str, override: dict | None = None) -> str:
                     f"(입력 화면 {'있음' if desktop_available() else '없음'})"
                 )
     password = None  # noqa: F841
-
-    time.sleep(2)
-    closed = close_browser_login_tabs(target)
-    if closed:
-        steps.append(f"로그인 탭 {closed}개 닫음")
     return workspace, " → ".join(steps)
 
 
