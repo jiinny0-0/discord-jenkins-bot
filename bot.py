@@ -3376,6 +3376,90 @@ async def connector_status(interaction: discord.Interaction, lang: app_commands.
 tree.add_command(connector_group, guilds=TEST_GUILDS)
 
 
+# ---- /bat-account: 스테이지별 기본 워크스페이스·계정 (비밀번호·토큰은 읽지 않음) ----
+def stage_account_rows() -> list[dict]:
+    """스테이지마다 {stage, app, workspace, bat_workspace, user, error}.
+
+    connector.py와 같은 기준으로 읽는다 (커넥터가 실제로 로그인하는 값):
+    - 워크스페이스: .env.<stage>의 CONNECTOR_WORKSPACE > environments.yaml의 workspace
+    - 계정: .env.<stage>의 BAT_CONSOLE_USER > Windows 자격 증명(keyring)의 <stage>/default 아이디
+    - bat_workspace: .env.<stage>에 BAT_WORKSPACE가 따로 있고 위 워크스페이스와 다를 때만
+    """
+    import keyring
+
+    import connector as cfg  # 화면 조작 모듈은 connector 함수 안에서만 불러오므로 여기서는 설정 읽기만 한다
+
+    rows = []
+    for stage in STAGES:
+        row = {"stage": stage, "app": "", "workspace": "", "bat_workspace": "", "user": "", "error": ""}
+        try:
+            values = cfg.stage_env(stage)
+            row["app"] = cfg.APPS[cfg.app_for_stage(stage)]["label"]
+            row["workspace"] = cfg.workspace_for(stage)
+            bat_ws = (values.get("BAT_WORKSPACE") or "").strip()
+            if bat_ws and bat_ws != row["workspace"]:
+                row["bat_workspace"] = bat_ws
+            user = (values.get("BAT_CONSOLE_USER") or "").strip()
+            if not user:
+                for key in (stage, "default"):
+                    user = keyring.get_password(cfg.KEYRING_SERVICE, f"{key}:id") or ""
+                    if user:
+                        break
+            row["user"] = user
+        except Exception as e:
+            row["error"] = cfg.sanitize(str(e)) if hasattr(cfg, "sanitize") else type(e).__name__
+        rows.append(row)
+    return rows
+
+
+account_group = app_commands.Group(name="bat-account", description=L("Stage default accounts",
+                                                                     "스테이지별 기본 계정"))
+
+
+@account_group.command(name="list", description=L("Default workspace and account email for each stage",
+                                                  "스테이지별 기본 워크스페이스와 계정 이메일 보기"))
+@with_lang
+async def account_list(interaction: discord.Interaction, lang: app_commands.Choice[str] | None = None):
+    lang = lang_for(interaction, lang)
+    if CONNECTOR_ALLOWED and interaction.user.id not in CONNECTOR_ALLOWED:
+        await interaction.response.send_message(
+            tr(lang, "이 명령어를 사용할 권한이 없습니다.", "You do not have permission to use this command."),
+            ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)  # 계정 정보라 요청한 사람에게만 보인다
+    try:
+        rows = await asyncio.to_thread(stage_account_rows)
+    except Exception:
+        log.exception("계정 목록 조회 실패")
+        await interaction.followup.send(tr(lang, "계정 목록을 읽지 못했습니다. 봇 콘솔 로그를 확인해 주세요.",
+                                           "Could not read the account list. Please check the bot console log."),
+                                        ephemeral=True)
+        return
+
+    none = tr(lang, "(설정 없음)", "(not set)")
+    embed = discord.Embed(title=tr(lang, "👤 스테이지별 기본 계정", "👤 Default accounts by stage"), color=0x5865F2)
+    for row in rows:
+        if row["error"]:
+            # 읽기 실패는 화면에 띄우지 않고 '설정 없음'으로 보여 준다 (사용자 요청). 이유는 봇 로그에만 남긴다.
+            log.info("/bat-account %s 읽기 실패: %s", row["stage"], row["error"])
+        lines = [
+            tr(lang, f"워크스페이스: `{row['workspace'] or none}`", f"Workspace: `{row['workspace'] or none}`"),
+            tr(lang, f"계정: `{row['user'] or none}`", f"Account: `{row['user'] or none}`"),
+        ]
+        if row["bat_workspace"]:
+            lines.append(tr(lang, f"BAT 워크스페이스: `{row['bat_workspace']}`",
+                            f"BAT workspace: `{row['bat_workspace']}`"))
+        value = "\n".join(lines)
+        name = f"{row['stage']} · {row['app']}" if row["app"] else row["stage"]
+        embed.add_field(name=name, value=value[:1024], inline=False)
+    embed.set_footer(text=tr(lang, "원본: .env.<stage>, environments.yaml · 비밀번호·토큰은 표시하지 않음",
+                             "Source: .env.<stage>, environments.yaml · passwords and tokens are never shown"))
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+tree.add_command(account_group, guilds=TEST_GUILDS)
+
+
 # ---- /help: 카테고리별 명령어 안내 + 가이드 문서 링크 버튼 ----
 HELP_STAGE = f"stage: {' · '.join(STAGES)}"
 # 섹션마다 ((제목 ko, en), [(사용법, (설명 ko, en), [옵션 값...]), ...]). [ ]는 비워도 되는 옵션.
@@ -3414,6 +3498,8 @@ HELP_SECTIONS = [
          [HELP_STAGE]),
         ("/connector status", ("앱·로그인·연결 상태", "App, login and connection status"), []),
         ("/connector logout", ("로그아웃", "Log out"), []),
+        ("/bat-account list", ("스테이지별 기본 워크스페이스·계정 이메일 (나에게만 보임)",
+                               "Default workspace and account email per stage (only you see it)"), []),
     ]),
     (("🛠️ 점검·관리", "🛠️ Checks · admin"), [
         ("/bat-doctor stage", ("인증·REST·로그 조회 점검", "Check auth, REST and log lookup"), []),
