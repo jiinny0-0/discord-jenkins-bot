@@ -76,9 +76,23 @@ TIMING_PATTERN = re.compile(r"\[BAT-TIMING\]\s+(START|END)=(\S+)")
 EXCLUDE_LINE_PATTERN = re.compile(r"\[EXCLUDE\] items=(\S+)")
 COPY_LINE_PATTERN = re.compile(r"복사:\s*(.+?\.csv)\s*$", re.MULTILINE | re.IGNORECASE)
 
+def _log_handlers() -> list[logging.Handler]:
+    """콘솔 + 파일(bot-data\\bot.log, 5MB×3개 순환). 봇 창이 닫혀도 꺼진 이유가 남도록."""
+    from logging.handlers import RotatingFileHandler
+
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    try:
+        handlers.append(RotatingFileHandler(BOT_DATA_DIR / "bot.log", maxBytes=5 * 1024 * 1024,
+                                            backupCount=3, encoding="utf-8"))
+    except OSError:
+        pass  # 파일을 못 열어도 봇은 띄운다
+    return handlers
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
+    handlers=_log_handlers(),
 )
 log = logging.getLogger(__name__)
 
@@ -3550,4 +3564,10 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        log.info("봇 종료 (Ctrl+C)")
+    except Exception:
+        log.exception("봇이 오류로 종료됨")  # bot.log에 남긴다. start-bot.ps1이 잠시 뒤 다시 띄운다.
+        sys.exit(1)

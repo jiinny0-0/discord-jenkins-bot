@@ -98,8 +98,15 @@ git으로 받는 것은 두 저장소 폴더뿐입니다. 비밀값과 상태 �
 | 대상 | 방법 |
 |---|---|
 | BAT 코드 | update Job (`TARGET=bat`). 패키지가 크게 바뀌었으면 setup Job |
-| 봇 코드 | update Job (`TARGET=bot` 또는 `all`) 후 **봇 재시작** (봇 창을 닫고 `start-bot.ps1` 다시 실행) |
+| 봇 코드 | update Job (`TARGET=bot` 또는 `all`) 후 **봇 재시작** (아래) |
 | 비밀값·설정 | `C:\test-automation\.env.*`, `environments.yaml`, `bot-data\.env` 수정. 봇 `.env`는 봇 재시작 때 반영 |
+
+**봇 재시작**: `start-bot.ps1`은 봇이 꺼지면 30초 뒤 다시 띄웁니다. 그래서 봇 창은 그대로 두고 python만 끄면 새 코드로 다시 뜹니다 (관리자 PowerShell).
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -like '*bot.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+```
+완전히 끄려면 봇 창을 닫습니다. 다시 켜기: `Start-ScheduledTask -TaskName discord-jenkins-bot` (관리자 PowerShell).
+시작·종료 기록은 `bot-data\bot-start.log`, 봇 로그(꺼진 이유 포함)는 `bot-data\bot.log`에 남습니다.
 
 봇은 반드시 한 번에 하나만 띄웁니다. 같은 토큰으로 둘이 돌면 명령과 알림이 두 번씩 처리됩니다.
 
