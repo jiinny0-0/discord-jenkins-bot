@@ -28,12 +28,8 @@ DISCORD_BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
 DISCORD_GUILD_IDS = [int(x) for x in os.environ["DISCORD_GUILD_ID"].replace(" ", "").split(",") if x]
 if not DISCORD_GUILD_IDS:
     raise RuntimeError("DISCORD_GUILD_ID가 비어 있습니다")
-# (선택) Jenkins 화면에서 실행한 Build의 알림 채널을 고정하고 싶을 때만 설정.
-# 없으면 마지막으로 /bat를 사용한 채널로 보낸다.
-# Jenkins 화면에서 직접 실행한 Build의 알림 채널. 여러 개면 쉼표로 구분 (서버마다 하나씩 등).
-DISCORD_NOTIFY_CHANNEL_IDS = [
-    int(x) for x in os.environ.get("DISCORD_NOTIFY_CHANNEL_ID", "").replace(" ", "").split(",") if x
-]
+# DISCORD_NOTIFY_CHANNEL_ID는 더 이상 쓰지 않는다. Jenkins 화면에서 실행한 Build는 자동 알림이 없고
+# (결과는 /bat-result로 확인), 봇으로 실행한 Build는 실행한 채널로만 알림이 간다.
 
 JENKINS_URL = os.environ["JENKINS_URL"].rstrip("/")
 JENKINS_JOB = os.environ["JENKINS_JOB"]
@@ -936,7 +932,7 @@ def save_state() -> None:
 
 
 def remember_channel(channel_id: int, build_number: int | None = None, options: dict | None = None) -> None:
-    """/bat를 사용한 채널을 기억한다. 해당 Build와 이후 Jenkins 화면 실행 Build의 알림 채널이 된다.
+    """/bat를 사용한 채널을 기억한다. build_number가 있으면 그 Build의 완료 알림 채널이 된다.
 
     options: 그 Build 완료 알림에 쓸 실행 옵션 (show 등). 비밀값은 넣지 않는다.
     """
@@ -950,17 +946,14 @@ def remember_channel(channel_id: int, build_number: int | None = None, options: 
 
 
 async def resolve_channels(build_number: int) -> list:
-    """알림 보낼 채널들. 우선순위: 이 Build를 /bat로 실행한 채널(그 하나만)
-    > .env 고정 채널(여러 개면 전부) > 마지막 /bat 채널."""
+    """알림 보낼 채널: 이 Build를 봇으로 실행한 채널 하나뿐.
+
+    Jenkins 화면에서 직접 실행한 Build는 자동 알림을 보내지 않는다 (사용자 요청). 결과는 /bat-result로 본다.
+    """
     own = (state.get("build_channels") or {}).get(str(build_number))
-    if own:
-        channel_ids = [own]
-    elif DISCORD_NOTIFY_CHANNEL_IDS:
-        channel_ids = DISCORD_NOTIFY_CHANNEL_IDS
-    elif state.get("default_channel_id"):
-        channel_ids = [state["default_channel_id"]]
-    else:
+    if not own:
         return []
+    channel_ids = [own]
     channels = []
     for channel_id in channel_ids:
         channel = client.get_channel(int(channel_id))
@@ -975,7 +968,7 @@ async def resolve_channels(build_number: int) -> list:
 
 
 async def watch_builds() -> None:
-    """실행 경로(/bat, Jenkins UI)와 관계없이 완료된 Build마다 한 번씩 알림을 보낸다."""
+    """봇으로 실행한 Build가 끝나면 실행한 채널로 한 번 알림을 보낸다. Jenkins 화면에서 실행한 Build는 건너뛴다."""
     await client.wait_until_ready()
 
     while "last_notified" not in state:
@@ -1001,13 +994,15 @@ async def watch_builds() -> None:
                     break  # 번호 순서대로 알림
                 build_url = item.get("url") or f"{JENKINS_URL}{JOB_PATH}/{number}/"
                 build = await jenkins_get(build_url.rstrip("/") + "/" + BUILD_API_TREE)
+                own = (state.get("build_channels") or {}).get(str(number))
+                if not own and monitor_task is not None and not monitor_task.done():
+                    # 봇 요청의 Build 번호를 아직 확인 중이다. 이 Build가 그 요청일 수 있으니 다음 주기에 다시 본다.
+                    break
                 channels = await resolve_channels(number)
-                if not channels:
-                    log.warning(
-                        "Build #%s 알림 건너뜀: 보낼 채널이 없음 "
-                        "(/bat를 한 번 사용하면 그 채널이 기본 알림 채널이 됨)",
-                        number,
-                    )
+                if not own:
+                    log.info("Build #%s 알림 안 함: 봇으로 실행하지 않은 Build (Jenkins 화면 실행 등)", number)
+                elif not channels:
+                    log.warning("Build #%s 알림 건너뜀: 실행 채널을 찾지 못함 (채널 삭제 또는 봇 권한)", number)
                 options = (state.get("build_options") or {}).get(str(number))
                 for channel in channels:
                     try:

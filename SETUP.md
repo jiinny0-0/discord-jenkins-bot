@@ -65,7 +65,6 @@ git으로 받는 것은 두 저장소 폴더뿐입니다. 비밀값과 상태 �
    | `JENKINS_LINK_URL` | `/jenkins` 명령이 보여줄 주소 (선택) |
    | `DISCORD_BOT_TOKEN` | 2-3 |
    | `DISCORD_GUILD_ID` | 서버 ID. 여러 개면 쉼표로 구분 (실행은 서버와 상관없이 한 번에 하나) |
-   | `DISCORD_NOTIFY_CHANNEL_ID` | Jenkins 화면에서 직접 실행한 Build의 알림 채널. 여러 개면 쉼표로 구분. 봇으로 실행한 Build는 실행한 채널로만 감 |
    | `BAT_RESULT_DIR` | 본 Job의 `DEST` 경로. 아티팩트가 없는 예전 Build의 결과를 찾을 때 씀 |
    | `CONNECTOR_ALLOWED_USER_IDS` | `/connector` 허용 사용자 ID (선택, 비우면 모두) |
    | `USASE_EXE`, `AICONNECTOR_EXE` | 커넥터 앱이 기본 경로가 아닐 때만 |
@@ -110,7 +109,7 @@ git으로 받는 것은 두 저장소 폴더뿐입니다. 비밀값과 상태 �
 |---|---|
 | 명령어가 Discord에 안 보임 | `DISCORD_GUILD_ID`, 초대 URL의 `applications.commands`. 봇 재시작 후 Discord 새로고침(Ctrl+R) |
 | "Jenkins 조회 실패: HTTP 401/403" | `JENKINS_USER`, `JENKINS_API_TOKEN` |
-| 완료 알림이 안 옴 | `DISCORD_NOTIFY_CHANNEL_ID`와 그 채널의 봇 권한 |
+| 완료 알림이 안 옴 | 봇으로 실행한 Build만 실행한 채널로 알림이 감 (Jenkins 화면 실행은 알림 없음, `/bat-result`로 확인). 그 채널의 봇 권한 |
 | 결과 파일을 찾지 못함 | Build에 `bat-artifacts` 아티팩트가 있는지. 예전 Build면 `BAT_RESULT_DIR` |
 | 커넥터 준비 실패 | 봇이 로그인된 데스크톱 세션에서 도는지, `.env.<stage>` 계정, 화면 잠금. 기록은 `bot-data\connector-last.log` |
 | `[실행 실패] doctor 점검 실패` | 콘솔 세션 만료. 커넥터를 끄고 `bat login --profile <stage>` |
