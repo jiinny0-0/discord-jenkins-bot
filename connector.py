@@ -1476,6 +1476,18 @@ BROWSER_IMAGES = ("chrome.exe", "msedge.exe")
 LOGIN_TAB_MARK = "connector_url="
 
 
+def _edit_value(edit) -> str:
+    """UIA 입력칸의 값 (Value 패턴). 못 읽으면 빈 문자열."""
+    try:
+        return edit.iface_value.CurrentValue or ""
+    except Exception:
+        pass
+    try:
+        return edit.get_value() or ""
+    except Exception:
+        return ""
+
+
 def _browser_address(window) -> str:
     """브라우저 창의 주소창 값 (현재 탭). 웹페이지 안의 입력칸과 구분하려고 주소창 이름으로 고른다."""
     fallback = ""
@@ -1536,37 +1548,49 @@ def _close_login_tabs_in(window, host: str, label: str) -> int:
     original = next((t.window_text() for t in tabs if _tab_selected(t)), None)
     closed = 0
     unreadable = 0
-    for _ in range(30):  # 닫을 때마다 탭 목록이 바뀌므로 처음부터 다시 훑는다 (무한 반복 방지)
-        tabs = window.descendants(control_type="TabItem")
-        found = False
-        unreadable = 0
-        for tab in tabs or [None]:  # 탭 목록이 안 보이면 현재 탭만 확인
-            if tab is not None and not _tab_selected(tab):
-                tab.iface_selection_item.Select()
-                time.sleep(0.3)
-            url = _browser_address(window)
-            if not url:
-                unreadable += 1
-            elif _is_login_tab_url(url, host):
-                found = True  # 이 탭이 지금 선택돼 있음
+    window_gone = False
+    try:
+        for _ in range(30):  # 닫을 때마다 탭 목록이 바뀌므로 처음부터 다시 훑는다 (무한 반복 방지)
+            tabs = window.descendants(control_type="TabItem")
+            found = False
+            unreadable = 0
+            previous = _browser_address(window)
+            for tab in tabs or [None]:  # 탭 목록이 안 보이면 현재 탭만 확인
+                if tab is not None and not _tab_selected(tab):
+                    tab.iface_selection_item.Select()
+                    # 주소창이 새 탭 주소로 바뀔 때까지 잠깐 기다린다 (같은 주소 탭이면 1.5초 뒤 그대로 진행)
+                    wait_until(lambda: _browser_address(window) != previous, timeout=1.5, interval=0.2)
+                url = _browser_address(window)
+                previous = url
+                if not url:
+                    unreadable += 1
+                elif _is_login_tab_url(url, host):
+                    found = True  # 이 탭이 지금 선택돼 있음
+                    break
+            if not found:
                 break
-        if not found:
-            break
-        last_tab = len(tabs) <= 1
-        if not _close_current_tab(window):
-            say(f"  로그인 탭 정리: {label} 탭 닫기 버튼을 찾지 못함")
-            break
-        closed += 1
-        time.sleep(0.7)
-        if last_tab:
-            return closed  # 탭이 하나뿐이라 창을 닫음
-    if unreadable:
-        say(f"  로그인 탭 정리: {label} 주소를 읽지 못한 탭 {unreadable}개 (화면 잠김·최소화 가능성)")
-    if original:
-        for tab in window.descendants(control_type="TabItem"):
-            if tab.window_text() == original and not _tab_selected(tab):
-                tab.iface_selection_item.Select()
+            last_tab = len(tabs) <= 1
+            if not _close_current_tab(window):
+                say(f"  로그인 탭 정리: {label} 탭 닫기 버튼을 찾지 못함")
                 break
+            closed += 1
+            time.sleep(0.7)
+            if last_tab:
+                window_gone = True  # 탭이 하나뿐이라 창을 닫음
+                break
+        if unreadable:
+            say(f"  로그인 탭 정리: {label} 주소를 읽지 못한 탭 {unreadable}개 (화면 잠김·최소화 가능성)")
+    finally:
+        # 중간에 오류가 나도 원래 보던 탭으로 돌려놓는다 (그 탭을 닫았으면 그대로 둠)
+        if original and not window_gone:
+            try:
+                for tab in window.descendants(control_type="TabItem"):
+                    if tab.window_text() == original:
+                        if not _tab_selected(tab):
+                            tab.iface_selection_item.Select()
+                        break
+            except Exception:
+                pass
     return closed
 
 
