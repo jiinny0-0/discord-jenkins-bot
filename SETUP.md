@@ -101,12 +101,57 @@ git으로 받는 것은 두 저장소 폴더뿐입니다. 비밀값과 상태 �
 | 봇 코드 | update Job (`TARGET=bot` 또는 `all`) 후 **봇 재시작** (아래) |
 | 비밀값·설정 | `C:\test-automation\.env.*`, `environments.yaml`, `bot-data\.env` 수정. 봇 `.env`는 봇 재시작 때 반영 |
 
-**봇 재시작**: `start-bot.ps1`은 봇이 꺼지면 30초 뒤 다시 띄웁니다. 그래서 봇 창은 그대로 두고 python만 끄면 새 코드로 다시 뜹니다 (관리자 PowerShell).
+**봇 재시작** (관리자 PowerShell): 커넥터 조작·BAT 테스트가 진행 중이면 끝날 때까지 기다린 뒤 끄고 다시 켭니다.
 ```powershell
-Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.CommandLine -like '*bot.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\test-automation\discord-jenkins-bot\restart-bot.ps1
 ```
-완전히 끄려면 봇 창을 닫습니다. 다시 켜기: `Start-ScheduledTask -TaskName discord-jenkins-bot` (관리자 PowerShell).
-시작·종료 기록은 `bot-data\bot-start.log`, 봇 로그(꺼진 이유 포함)는 `bot-data\bot.log`에 남습니다.
+- 끄기만: 같은 명령에 `-StopOnly`. 켜기만: `Start-ScheduledTask -TaskName discord-jenkins-bot`
+- `start-bot.ps1`은 봇이 오류로 꺼지면 30초 뒤 다시 띄웁니다. 완전히 끄려면 봇 창을 닫거나 `-StopOnly`.
+- 시작·종료 기록은 `bot-data\bot-start.log`, 봇 로그(꺼진 이유 포함)는 `bot-data\bot.log`에 남습니다.
+
+### 3-1. 봇 자동 배포 (GitHub push → 1분 안에 서버 반영)
+
+Jenkins에 Job `bot-auto-update`를 만듭니다 (새로운 Item → Freestyle project).
+
+| 설정 | 값 |
+|---|---|
+| 소스 코드 관리 | Git. Repository URL `https://github.com/jiinny0-0/discord-jenkins-bot.git`, Branch `*/master` |
+| 빌드 유발 | **Poll SCM**, Schedule `* * * * *` (1분마다 새 커밋 확인) |
+| Build Steps | Execute Windows batch command: 아래 |
+
+```bat
+@echo off
+chcp 65001 > nul
+rem safe.directory는 환경변수로 넘긴다 (for /f 안에서는 -c 옵션의 '='가 깨짐)
+set GIT_CONFIG_COUNT=1
+set GIT_CONFIG_KEY_0=safe.directory
+set GIT_CONFIG_VALUE_0=*
+set BOT_DIR=C:\test-automation\discord-jenkins-bot
+set BOT_BRANCH=master
+set RUN_PS=powershell -NoProfile -ExecutionPolicy Bypass -File
+
+for /f %%r in ('git -C "%BOT_DIR%" rev-parse HEAD') do set BOT_OLD=%%r
+git -C "%BOT_DIR%" fetch origin %BOT_BRANCH% || exit /b 1
+git -C "%BOT_DIR%" reset --hard origin/%BOT_BRANCH% || exit /b 1
+git -C "%BOT_DIR%" log -1 --oneline
+
+rem 봇 끄기 (커넥터 조작·BAT 테스트 중이면 끝날 때까지 대기)
+%RUN_PS% "%BOT_DIR%\restart-bot.ps1" -StopOnly || exit /b 1
+
+git -C "%BOT_DIR%" diff --quiet %BOT_OLD% HEAD -- requirements.txt
+if errorlevel 1 (
+    echo requirements.txt 변경됨: 패키지 설치
+    "%BOT_DIR%\.venv\Scripts\python.exe" -m pip install -q -r "%BOT_DIR%\requirements.txt"
+    if errorlevel 1 echo [WARN] 패키지 설치 실패
+)
+
+rem 봇 켜기 (작업 스케줄러)
+%RUN_PS% "%BOT_DIR%\restart-bot.ps1"
+exit /b %ERRORLEVEL%
+```
+
+- 봇 계정이 로그인돼 있어야 봇이 그 데스크톱에서 뜹니다 (자동 로그인 설정, 2-4).
+- 봇 폴더에서 직접 고친 코드는 `reset --hard`로 지워집니다. 고칠 때는 GitHub에 push합니다.
 
 봇은 반드시 한 번에 하나만 띄웁니다. 같은 토큰으로 둘이 돌면 명령과 알림이 두 번씩 처리됩니다.
 
