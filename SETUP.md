@@ -70,7 +70,27 @@ git으로 받는 것은 두 저장소 폴더뿐입니다. 비밀값과 상태 �
    | `CONNECTOR_ALLOWED_USER_IDS` | `/connector` 허용 사용자 ID (선택, 비우면 모두) |
    | `USASE_EXE`, `AICONNECTOR_EXE` | 커넥터 앱이 기본 경로가 아닐 때만 |
 
-3. **로그인된 데스크톱 세션에서** 실행합니다. 커넥터 화면을 조작하므로 서비스나 Jenkins에서 돌리면 안 됩니다.
+3. **로그인된 데스크톱 세션에서, 관리자 권한으로** 실행합니다. 커넥터 화면을 조작하므로 서비스나 Jenkins에서 돌리면 안 됩니다.
+   U+SASE 앱이 관리자 권한으로만 실행되기 때문에, 봇이 일반 권한이면 `/connector on`이 `WinError 740`으로 실패합니다.
+
+   자동 실행 등록 (권장, 한 번만): 관리자 PowerShell에서, 봇을 띄울 계정으로 실행합니다.
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File C:\test-automation\discord-jenkins-bot\register-autostart.ps1 -StartNow
+   ```
+   그 계정이 로그온할 때마다 봇이 관리자 권한으로 뜹니다 (작업 이름 `discord-jenkins-bot`). 해제는 `-Remove`.
+   재부팅 후 아무도 로그인하지 않으면 뜨지 않으므로, 무인 운영이면 서버 자동 로그인도 설정합니다.
+
+   자동 로그인: Microsoft Sysinternals의 [Autologon](https://learn.microsoft.com/sysinternals/downloads/autologon)을 씁니다.
+   비밀번호를 레지스트리에 평문으로 두지 않고 암호화(LSA secret)해서 저장합니다.
+   1. `Autologon64.exe`를 관리자 권한으로 실행 → Username(봇 계정), Domain(로컬 계정이면 컴퓨터 이름), Password 입력 → **Enable**
+   2. 화면 잠금이 걸리면 커넥터 조작이 실패하므로 잠금을 끕니다: 설정 → 계정 → 로그인 옵션에서 "다시 로그인 필요"를 **안 함**,
+      화면 보호기 "다시 시작할 때 로그온 화면 표시" 해제. 도메인 그룹 정책으로 잠금이 강제되면 IT 담당자에게 예외를 요청합니다.
+   3. 서버를 재부팅해 자동 로그인 → 봇 창이 뜨는지 확인합니다.
+   4. 원격 데스크톱(RDP)으로 접속했다가 창을 닫으면 세션이 잠긴 상태로 남습니다. 연결을 끊을 때는 원격 세션 안의 관리자 명령 프롬프트에서
+      `tscon %sessionname% /dest:console`을 실행해 콘솔로 돌려놓습니다.
+   해제는 Autologon에서 **Disable**.
+
+   직접 실행: 관리자 PowerShell에서
    ```powershell
    powershell -ExecutionPolicy Bypass -File C:\test-automation\discord-jenkins-bot\start-bot.ps1
    ```

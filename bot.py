@@ -1806,18 +1806,16 @@ def format_result_summary(
 ) -> list[str]:
     """PASS/FAIL/WARN/BAT_ERROR를 표시한다. show_all이면 UNVERIFIED/SKIP도 케이스별로 표시한다.
 
-    미실행 등 다른 상태는 표시하지 않는다. 숨긴 상태는 개수만 한 줄로 남긴다.
+    미실행 등 다른 상태는 표시하지 않는다. show_all이 아니면 숨긴 상태는 개수도 표시하지 않는다
+    (완료 알림과 같음, 사용자 요청).
     """
     # gate는 새 BAT인지(FAIL = 치명) 구분하는 데만 쓴다. 롤백 판정 문구는 보여주지 않는다.
     lines: list[str] = []
-    hidden: list[str] = []
     for status in RESULT_STATUS_ORDER:
         items = grouped.get(status, [])
         if status in SHOW_ONLY_IF_PRESENT and not items:
             continue
         if status in HIDDEN_BY_DEFAULT and not show_all:
-            if items:
-                hidden.append(f"{status} {len(items)}")
             continue
         hint = STATUS_HINTS.get(status)
         if status == "FAIL" and not gate:
@@ -1826,10 +1824,6 @@ def format_result_summary(
         lines.append(tr(lang, f"**{status}** {len(items)}개{suffix}", f"**{status}** {len(items)}{suffix}"))
         if status != "PASS":
             lines.extend(f"- {case_id}({reason})" for case_id, reason in items)
-    if hidden:
-        hidden_text = " · ".join(hidden)
-        lines.append(tr(lang, f"🙈 숨김: {hidden_text} (`show:all`로 보기)",
-                        f"🙈 Hidden: {hidden_text} (see with `show:all`)"))
     return lines
 
 
